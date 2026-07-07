@@ -14,6 +14,11 @@ var (
 	treehouseBin      string
 	exitShellBin      string
 	dirtyMainShellBin string
+
+	// gitTestEnv is the environment for git invocations made directly by
+	// tests. It disables user- and system-level git configuration so results
+	// don't depend on the developer's global gitignore or other settings.
+	gitTestEnv []string
 )
 
 func TestMain(m *testing.M) {
@@ -21,6 +26,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+
+	// A nonexistent config path is treated by git as an empty config file.
+	gitTestEnv = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(buildDir, "no-gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
 
 	// Build the treehouse binary from the module root (parent of cmd/).
 	treehouseBin = filepath.Join(buildDir, "treehouse")
@@ -201,14 +212,15 @@ func runTreehouseFromDir(t *testing.T, repoDir, workDir, homeDir string, extraEn
 }
 
 // buildEnv constructs an environment for a treehouse subprocess, overriding
-// HOME/USERPROFILE to the test homeDir and suppressing update checks.
+// HOME/USERPROFILE to the test homeDir.
 func buildEnv(homeDir string, extra ...string) []string {
 	skip := map[string]bool{
-		"HOME":          true,
-		"USERPROFILE":   true,
-		"HOMEDRIVE":     true,
-		"HOMEPATH":      true,
-		"TREEHOUSE_DIR": true,
+		"HOME":            true,
+		"USERPROFILE":     true,
+		"HOMEDRIVE":       true,
+		"HOMEPATH":        true,
+		"TREEHOUSE_DIR":   true,
+		"XDG_CONFIG_HOME": true,
 	}
 	for _, kv := range extra {
 		if k, _, ok := strings.Cut(kv, "="); ok {
@@ -231,7 +243,6 @@ func buildEnv(homeDir string, extra ...string) []string {
 	} else {
 		env = append(env, "HOME="+homeDir)
 	}
-	env = append(env, "TREEHOUSE_NO_UPDATE_CHECK=1")
 	env = append(env, extra...)
 	return env
 }
@@ -240,6 +251,7 @@ func buildEnv(homeDir string, extra ...string) []string {
 func gitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
+	cmd.Env = gitTestEnv
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -253,6 +265,7 @@ func gitCmd(t *testing.T, dir string, args ...string) string {
 func gitCmdResult(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
+	cmd.Env = gitTestEnv
 	if dir != "" {
 		cmd.Dir = dir
 	}
