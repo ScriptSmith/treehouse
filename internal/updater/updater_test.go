@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 )
 
 func TestCompareVersions(t *testing.T) {
@@ -80,134 +79,6 @@ func TestParseVersion(t *testing.T) {
 		if got.prerelease != tt.wantPrerel {
 			t.Errorf("parseVersion(%q).prerelease = %q, want %q", tt.input, got.prerelease, tt.wantPrerel)
 		}
-	}
-}
-
-func TestCacheReadWriteStaleness(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
-	// Cache should not exist yet
-	result := ReadCache("v1.0.0")
-	if result != nil {
-		t.Fatal("expected nil from ReadCache with no cache file")
-	}
-
-	if !IsCacheStale("v1.0.0") {
-		t.Fatal("expected stale with no cache file")
-	}
-
-	// Write cache
-	entry := CacheEntry{
-		CheckedAt:     time.Now(),
-		LatestVersion: "v2.0.0",
-	}
-	if err := writeCache(entry); err != nil {
-		t.Fatalf("writeCache: %v", err)
-	}
-
-	// Cache should now be readable
-	result = ReadCache("v1.0.0")
-	if result == nil {
-		t.Fatal("expected non-nil from ReadCache")
-	}
-	if !result.UpdateAvailable {
-		t.Error("expected UpdateAvailable=true")
-	}
-	if result.LatestVersion != "v2.0.0" {
-		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "v2.0.0")
-	}
-
-	// Cache should not be stale (current v1.0.0 < cached latest v2.0.0)
-	if IsCacheStale("v1.0.0") {
-		t.Error("expected fresh cache")
-	}
-
-	// No update available when current >= latest
-	result = ReadCache("v2.0.0")
-	if result == nil {
-		t.Fatal("expected non-nil from ReadCache")
-	}
-	if result.UpdateAvailable {
-		t.Error("expected UpdateAvailable=false when current == latest")
-	}
-
-	result = ReadCache("v3.0.0")
-	if result == nil {
-		t.Fatal("expected non-nil from ReadCache")
-	}
-	if result.UpdateAvailable {
-		t.Error("expected UpdateAvailable=false when current > latest")
-	}
-}
-
-func TestCacheStaleAfterTTL(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
-	entry := CacheEntry{
-		CheckedAt:     time.Now().Add(-25 * time.Hour),
-		LatestVersion: "v1.0.0",
-	}
-	if err := writeCache(entry); err != nil {
-		t.Fatalf("writeCache: %v", err)
-	}
-
-	if !IsCacheStale("v0.9.0") {
-		t.Error("expected stale cache after TTL")
-	}
-}
-
-func TestCacheStaleWhenCurrentPastLatest(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
-	// Cache says latest is v1.0.0, but user is now on v1.1.0
-	entry := CacheEntry{
-		CheckedAt:     time.Now(),
-		LatestVersion: "v1.0.0",
-	}
-	if err := writeCache(entry); err != nil {
-		t.Fatalf("writeCache: %v", err)
-	}
-
-	// Should be stale because current version >= cached latest
-	if !IsCacheStale("v1.1.0") {
-		t.Error("expected stale when current version is newer than cached latest")
-	}
-	if !IsCacheStale("v1.0.0") {
-		t.Error("expected stale when current version equals cached latest")
-	}
-
-	// Should NOT be stale when cached latest is ahead of current
-	if IsCacheStale("v0.9.0") {
-		t.Error("expected fresh when cached latest is newer than current")
-	}
-}
-
-func TestCacheCorrupted(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
-	dir := filepath.Join(tmp, treehouseDir)
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, cacheFileName), []byte("not json"), 0o644)
-
-	result := ReadCache("v1.0.0")
-	if result != nil {
-		t.Error("expected nil from corrupted cache")
 	}
 }
 
@@ -337,37 +208,6 @@ func TestExtractTarGzMissingBinary(t *testing.T) {
 	}
 }
 
-func TestCacheRoundTrip(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
-	now := time.Now().Truncate(time.Second)
-	entry := CacheEntry{
-		CheckedAt:     now,
-		LatestVersion: "v1.2.3",
-	}
-	if err := writeCache(entry); err != nil {
-		t.Fatalf("writeCache: %v", err)
-	}
-
-	data, err := os.ReadFile(cachePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var got CacheEntry
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal cache: %v", err)
-	}
-
-	if got.LatestVersion != "v1.2.3" {
-		t.Errorf("LatestVersion = %q, want %q", got.LatestVersion, "v1.2.3")
-	}
-}
-
 // createTestTarGz builds a tar.gz archive containing a fake "treehouse" binary
 // with the given content, and returns the raw bytes.
 func createTestTarGz(t *testing.T, content []byte) []byte {
@@ -481,12 +321,6 @@ func fakeGitHubServer(t *testing.T, latestTag string, archiveBytes []byte) *http
 }
 
 func TestCheckLatestE2E(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
 	archive := createTestArchive(t, []byte("new-binary-content"))
 	srv := fakeGitHubServer(t, "v2.0.0", archive)
 
@@ -511,27 +345,9 @@ func TestCheckLatestE2E(t *testing.T) {
 	if result.ChecksumURL == "" {
 		t.Error("expected ChecksumURL to be set")
 	}
-
-	// Verify cache was written
-	cached := ReadCache("v1.0.0")
-	if cached == nil {
-		t.Fatal("expected cache to be written")
-	}
-	if cached.LatestVersion != "v2.0.0" {
-		t.Errorf("cached LatestVersion = %q, want %q", cached.LatestVersion, "v2.0.0")
-	}
-	if IsCacheStale("v1.0.0") {
-		t.Error("cache should be fresh after CheckLatest")
-	}
 }
 
 func TestCheckLatestNoUpdate(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	}
-
 	archive := createTestArchive(t, []byte("content"))
 	srv := fakeGitHubServer(t, "v1.0.0", archive)
 

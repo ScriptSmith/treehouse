@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -22,14 +21,11 @@ import (
 
 const (
 	defaultGitHubAPIURL = "https://api.github.com/repos/kunchenguid/treehouse/releases/latest"
-	cacheFileName       = "update-check.json"
 	checksumsFile       = "checksums.txt"
-	cacheTTL            = 24 * time.Hour
 	httpTimeout         = 30 * time.Second
 	maxDownloadSize     = 100 << 20 // 100 MB
 	maxBinarySize       = 100 << 20 // 100 MB
 	maxAPIResponseSize  = 5 << 20   // 5 MB
-	treehouseDir        = ".treehouse"
 )
 
 // githubAPIURL is the endpoint for fetching the latest release.
@@ -49,12 +45,6 @@ type CheckResult struct {
 	ChecksumURL     string `json:"checksum_url,omitempty"`
 }
 
-// CacheEntry is persisted to ~/.treehouse/update-check.json.
-type CacheEntry struct {
-	CheckedAt     time.Time `json:"checked_at"`
-	LatestVersion string    `json:"latest_version"`
-}
-
 // githubRelease is the subset of the GitHub API response we need.
 type githubRelease struct {
 	TagName string        `json:"tag_name"`
@@ -66,7 +56,7 @@ type githubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-// CheckLatest hits the GitHub API, compares versions, and writes the cache.
+// CheckLatest hits the GitHub API and compares versions.
 func CheckLatest(currentVersion string) (*CheckResult, error) {
 	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Get(githubAPIURL)
@@ -83,13 +73,6 @@ func CheckLatest(currentVersion string) (*CheckResult, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&release); err != nil {
 		return nil, fmt.Errorf("decoding release: %w", err)
 	}
-
-	// Write cache
-	entry := CacheEntry{
-		CheckedAt:     time.Now(),
-		LatestVersion: release.TagName,
-	}
-	_ = writeCache(entry)
 
 	result := &CheckResult{
 		CurrentVersion:  currentVersion,
@@ -108,109 +91,6 @@ func CheckLatest(currentVersion string) (*CheckResult, error) {
 	}
 
 	return result, nil
-}
-
-// ReadCache reads ~/.treehouse/update-check.json and returns a CheckResult
-// if the cache exists. Returns nil if missing or corrupt.
-func ReadCache(currentVersion string) *CheckResult {
-	path := cachePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-
-	var entry CacheEntry
-	if err := json.Unmarshal(data, &entry); err != nil {
-		return nil
-	}
-
-	if entry.LatestVersion == "" {
-		return nil
-	}
-
-	return &CheckResult{
-		CurrentVersion:  currentVersion,
-		LatestVersion:   entry.LatestVersion,
-		UpdateAvailable: CompareVersions(entry.LatestVersion, currentVersion) > 0,
-	}
-}
-
-// IsCacheStale returns true if the cache is >24h old, missing, or if the
-// cached latest version is not newer than the current version (which means
-// the user has updated past the cached latest and we should re-check).
-func IsCacheStale(currentVersion string) bool {
-	path := cachePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return true
-	}
-
-	var entry CacheEntry
-	if err := json.Unmarshal(data, &entry); err != nil {
-		return true
-	}
-
-	if time.Since(entry.CheckedAt) > cacheTTL {
-		return true
-	}
-
-	// If the user has updated past the cached latest version, the cache
-	// is effectively stale and we should re-check for even newer versions.
-	if currentVersion != "" && CompareVersions(entry.LatestVersion, currentVersion) <= 0 {
-		return true
-	}
-
-	return false
-}
-
-// SpawnBackgroundCheck spawns a detached child process to check for updates.
-// The child process inherits TREEHOUSE_NO_UPDATE_CHECK=1 to prevent recursive spawning.
-func SpawnBackgroundCheck(currentVersion string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolving executable: %w", err)
-	}
-	self, err = filepath.EvalSymlinks(self)
-	if err != nil {
-		return fmt.Errorf("resolving symlinks: %w", err)
-	}
-
-	cmd := exec.Command(self, "--update-check", currentVersion)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
-	cmd.Env = append(os.Environ(), "TREEHOUSE_NO_UPDATE_CHECK=1")
-
-	devNull, err := os.Open(os.DevNull)
-	if err == nil {
-		cmd.Stdout = devNull
-		cmd.Stderr = devNull
-		defer devNull.Close()
-	}
-
-	setSysProcAttr(cmd)
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawning update check: %w", err)
-	}
-
-	// Fire and forget — don't wait
-	go func() {
-		cmd.Wait()
-	}()
-
-	return nil
-}
-
-// RunBackgroundCheck is the entry point for the --update-check child process.
-// It checks for updates, writes the cache, and exits silently.
-func RunBackgroundCheck(args []string) {
-	if len(args) == 0 {
-		os.Exit(1)
-	}
-	currentVersion := args[0]
-	// Best-effort: ignore errors
-	CheckLatest(currentVersion)
 }
 
 // Apply downloads the archive, extracts the binary, and atomically replaces
@@ -349,33 +229,6 @@ func requireHTTPS(url string) error {
 		return fmt.Errorf("refusing non-HTTPS URL: %s", url)
 	}
 	return nil
-}
-
-func cachePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, treehouseDir, cacheFileName)
-}
-
-func writeCache(entry CacheEntry) error {
-	path := cachePath()
-	if path == "" {
-		return fmt.Errorf("cannot determine home directory")
-	}
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, data, 0o644)
 }
 
 func verifyChecksum(archivePath, checksumURL string) error {

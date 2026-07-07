@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/kunchenguid/treehouse/internal/git"
-	"github.com/kunchenguid/treehouse/internal/hooks"
-	"github.com/kunchenguid/treehouse/internal/process"
+	"github.com/kunchenguid/treehouse/v3/internal/git"
+	"github.com/kunchenguid/treehouse/v3/internal/hooks"
+	"github.com/kunchenguid/treehouse/v3/internal/process"
 )
 
 const (

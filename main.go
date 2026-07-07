@@ -4,8 +4,7 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/kunchenguid/treehouse/cmd"
-	"github.com/kunchenguid/treehouse/internal/updater"
+	"github.com/kunchenguid/treehouse/v3/cmd"
 )
 
 var version = ""
@@ -21,13 +20,6 @@ func init() {
 }
 
 func main() {
-	// Handle --update-check before Cobra: the background child process
-	// bypasses the normal command flow.
-	if len(os.Args) >= 2 && os.Args[1] == "--update-check" {
-		updater.RunBackgroundCheck(os.Args[2:])
-		return
-	}
-
 	cmd.SetVersion(version)
 	if err := cmd.Execute(); err != nil {
 		os.Exit(1)
