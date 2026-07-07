@@ -272,6 +272,22 @@ func IsHeadMergedIntoRef(worktreePath, ref string) (bool, error) {
 }
 
 // IsDirty reports tracked or untracked changes, ignoring status.showUntrackedFiles.
+// IsIgnored reports whether path is ignored by any of the repo's ignore
+// sources (.gitignore files, .git/info/exclude, core.excludesFile). path may
+// be relative to repoRoot and does not need to exist.
+func IsIgnored(repoRoot, path string) (bool, error) {
+	cmd := exec.Command("git", "check-ignore", "-q", "--", path)
+	cmd.Dir = repoRoot
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git check-ignore %s: %w", path, err)
+}
+
 func IsDirty(worktreePath string) (bool, error) {
 	out, err := runGit(worktreePath, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {

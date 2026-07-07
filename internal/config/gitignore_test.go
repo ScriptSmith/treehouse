@@ -10,6 +10,13 @@ import (
 
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
+
+	// Isolate from the developer's own git config: a global excludes file
+	// that happens to ignore .treehouse would change what EnsureGitignore
+	// (which consults git check-ignore) does in these tests.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
 	base := t.TempDir()
 	base, err := filepath.EvalSymlinks(base)
 	if err != nil {
@@ -88,6 +95,70 @@ func TestEnsureGitignore_Idempotent(t *testing.T) {
 	count := strings.Count(string(data), entry)
 	if count != 1 {
 		t.Errorf("expected entry exactly once, found %d times in:\n%s", count, data)
+	}
+}
+
+func TestEnsureGitignore_SkipsWhenGloballyIgnored(t *testing.T) {
+	repoDir := setupGitRepo(t)
+
+	excludes := filepath.Join(t.TempDir(), "gitignore_global")
+	if err := os.WriteFile(excludes, []byte(".treehouse\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repoDir, "git", "config", "core.excludesFile", excludes)
+
+	treehouseDir := filepath.Join(repoDir, ".treehouse")
+	if err := EnsureGitignore(treehouseDir); err != nil {
+		t.Fatalf("EnsureGitignore failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, ".gitignore")); !os.IsNotExist(err) {
+		t.Error("expected no .gitignore when the dir is covered by core.excludesFile")
+	}
+}
+
+func TestEnsureGitignore_SkipsWhenInfoExcluded(t *testing.T) {
+	repoDir := setupGitRepo(t)
+
+	exclude := filepath.Join(repoDir, ".git", "info", "exclude")
+	if err := os.MkdirAll(filepath.Dir(exclude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exclude, []byte("/.treehouse\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	treehouseDir := filepath.Join(repoDir, ".treehouse")
+	if err := EnsureGitignore(treehouseDir); err != nil {
+		t.Fatalf("EnsureGitignore failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, ".gitignore")); !os.IsNotExist(err) {
+		t.Error("expected no .gitignore when the dir is covered by .git/info/exclude")
+	}
+}
+
+func TestEnsureGitignore_SkipsWhenCoveredByBroaderPattern(t *testing.T) {
+	repoDir := setupGitRepo(t)
+
+	// A directory pattern that covers the pool without matching the exact
+	// entry EnsureGitignore would write.
+	original := ".treehouse/\n"
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	treehouseDir := filepath.Join(repoDir, ".treehouse")
+	if err := EnsureGitignore(treehouseDir); err != nil {
+		t.Fatalf("EnsureGitignore failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Errorf("expected .gitignore to be untouched, got:\n%s", data)
 	}
 }
 
